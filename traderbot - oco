@@ -1,0 +1,328 @@
+from keys import api, secret
+from binance.um_futures import  UMFutures
+import logging
+import ta
+import pandas as pd
+from time import sleep
+from binance.error import ClientError
+import binance.um_futures as client
+
+# API KULCSOK BEKÉRÉSE:
+client = UMFutures(key = api, secret=secret)
+
+# ALAP BEÁLLÍTÁSOK:
+# def stop_loss():
+#     pass
+
+tp = 0.01
+sl = 0.01
+#sl = stop_loss()
+volume = 15
+leverage = 25
+type = ('ISOLATED')
+
+# SZÁMLA ADATAINAK BEKÉRÉSE:
+def get_balance_usdt():
+    try:
+        response = client.balance(recvWindow=6000)
+        for elem in response:
+            if elem['asset'] == 'USDT':
+                return float(elem['balance'])
+    except ClientError as error:
+        print(
+            "Found error. status: {}, error code: {}, error message: {}".format(
+                error.status_code, error.error_code, error.error_message
+            )
+        )
+# GYERTYAADATOK LÉKLRLSE:
+def get_tickers_usdt():
+    tickers = []
+    resp = client.ticker_price()
+    for elem in resp:
+        if 'USDT' in elem['symbol']:
+            tickers.append(elem['symbol'])
+    return tickers
+def symbol():
+    if elem['asset'] == 'USDT':
+        return float(elem['balance'])
+
+print("A számlád: ", get_balance_usdt(), " USDT")
+
+# GYERTYA ADATOK LEKÉRÉSE ÉS ÁTNEVEZÉSE:
+def klines(symbol):
+    try:
+        resp = pd.DataFrame(client.klines(symbol, '5m'))
+        resp = resp.iloc[:,:6]
+        resp.columns = ['Time', 'Open', 'High', 'Low', 'Close', 'Volume']
+        resp = resp.set_index('Time')
+        resp.index = pd.to_datetime(resp.index, unit = 'ms')
+        resp = resp.astype(float)
+        return resp
+    except ClientError as error:
+        print(
+            "Found error. status: {}, error code: {}, error message: {}".format(
+                error.status_code, error.error_code, error.error_message
+            )
+        )
+# BTC GYERTYÁK KIIRATÁSA:
+#print(klines('BTCUSDT'))
+
+# TŐKEÁTTÉTEL KIIRATÁSA:
+def set_leverage(symbol, level):
+    try:
+        response = client.change_leverage(
+            symbol=symbol, leverage=level, recvWindow=6000
+        )
+        #print(response)
+    except ClientError as error:
+        print(
+            "Found error. status: {}, error code: {}, error message: {}".format(
+                error.status_code, error.error_code, error.error_message
+            )
+        )
+
+def set_mode(symbol, type):
+    try:
+        response = client.change_margin_type(
+            symbol=symbol, marginType=type, recvWindow=6000
+        )
+        #print(response)
+    except ClientError as error:
+        print(
+            "Found error. status: {}, error code: {}, error message: {}".format(
+                error.status_code, error.error_code, error.error_message
+            )
+        )
+
+# TIZEDESJEGY LEKÉRDEZÉS:
+def get_qty_precision(symbol):
+    resp = client.exchange_info()['symbols']
+    for elem in resp:
+        if elem['symbol'] == symbol:
+            return elem['quantityPrecision']
+
+# OPEN ORDER FÜGGVÉNY:
+def open_order(symbol, side, qty, price, sl, tp, price_precision, margin_type):
+    if side == 'buy':
+        try:
+            resp1 = client.new_order(symbol=symbol, side=side, type='MARKET', quantity=qty, price=price, margintype=margin_type)
+            print(symbol, side, "Megbizas elhelyezve")
+            order_id = resp1['orderId']
+
+            sleep(2)
+
+            tp_price = round(price + price * tp, price_precision)
+            sl_price = round(price - price * sl, price_precision)
+
+            # Take profit order elhelyezése(ELADÁS):
+            resp3 = client.new_order(symbol=symbol, side='SELL', type='TAKE_PROFIT_MARKET', quantity=qty,
+                                     timeInForce='OCO',
+                                     stopPrice=tp_price,
+                                     reduceOnly=True)
+            order_tpid = resp3['orderId']
+            print(resp3)
+
+            # Stop Loss order elhelyezése (VÉTEL):
+            resp4 = client.new_order(symbol=symbol, side='BUY' if side == 'SELL' else 'SELL', type='STOP_MARKET',
+                                     quantity=qty,
+                                     timeInForce='OCO',
+                                     stopPrice=sl_price,
+                                     reduceOnly=True)
+            order_slid = resp4['orderId']
+            print(resp4)
+
+        except ClientError as error:
+            print(
+                "Found error. status: {}, error code: {}, error message: {}".format(
+                    error.status_code, error.error_code, error.error_message
+                )
+            )
+    if side == 'sell':
+        try:
+            resp1 = client.new_order(symbol=symbol, side=side, type='MARKET', quantity=qty, price=price,
+                                     margintype=margin_type)
+            print(symbol, side, "Megbizas elhelyezve")
+            order_id = resp1['orderId']
+
+            sleep(2)
+
+            tp_price = round(price - price * tp, price_precision)
+            sl_price = round(price + price * sl, price_precision)
+
+            # Take profit order elhelyezése(ELADÁS):
+            resp3 = client.new_order(symbol=symbol, side='BUY', type='TAKE_PROFIT_MARKET', quantity=qty,
+                                     timeInForce='OCO',
+                                     stopPrice=tp_price,
+                                     reduceOnly=True)
+            order_tpid = resp3['orderId']
+            print(resp3)
+
+            # Stop Loss order elhelyezése (VÉTEL):
+            resp4 = client.new_order(symbol=symbol, side='SELL' if side == 'SELL' else 'SELL', type='STOP_MARKET',
+                                     quantity=qty,
+                                     timeInForce='OCO',
+                                     stopPrice=sl_price,
+                                     reduceOnly=True)
+            order_slid = resp4['orderId']
+            print(resp4)
+
+        except ClientError as error:
+            print(
+                "Found error. status: {}, error code: {}, error message: {}".format(
+                    error.status_code, error.error_code, error.error_message
+                )
+            )
+
+# NYITOTT POZICIÓK LEKÉRDEZÉSE:
+def get_pos():
+    try:
+        resp = client.get_position_risk()
+        pos = []
+        for elem in resp:
+            if float(elem['positionAmt']) != 0:
+                pos.append(elem['symbol'])
+        return pos
+    except ClientError as error:
+        print(
+            "Found error. status: {}, error code: {}, error message: {}".format(
+                error.status_code, error.error_code, error.error_message
+            )
+        )
+
+# NYITOTT MEGBÍZÁSOK(ORDEREK) LEKÉRDEZÉSE:
+def check_orders():
+    try:
+        response = client.get_orders(recvWindow=6000)
+        sym = []
+        for elem in response:
+            sym.append(elem['symbol'])
+        return sym
+    except ClientError as error:
+        print(
+            "Found error. status: {}, error code: {}, error message: {}".format(
+                error.status_code, error.error_code, error.error_message
+            )
+        )
+
+# STRATÉGIA KEZDETE:
+def rsi_signal(symbol):
+    # Klines adatok lekérdezése
+    kl = klines(symbol)
+
+    # RSI kiszámítása
+    rsi = ta.momentum.RSIIndicator(kl.Close).rsi()
+
+    # Jelzés kiszámítása
+    if rsi.iloc[-1] > 50 and rsi.iloc[-2] > 50 and rsi.iloc[-3] > 50:
+        return 'up'
+    if rsi.iloc[-1] < 50 and rsi.iloc[-2] < 50 and rsi.iloc[-3] < 50:
+        return 'down'
+    else:
+        return 'none'
+def ema200_50(symbol):
+    kl = klines(symbol)
+    ema200 = ta.trend.ema_indicator(kl.Close, window=200)
+    ema50 = ta.trend.ema_indicator(kl.Close, window=50)
+
+    current_ema50 = ema50.iloc[-1]
+    current_ema200 = ema200.iloc[-1]
+
+    if current_ema50 > current_ema200:
+        return 'up'
+    elif current_ema50 < current_ema200:
+        return 'down'
+    else:
+        return 'none'
+
+# trade signal, ez nézi hogy nincs e ellentmondás
+def trade_signal(symbol):
+    rsi_sig = rsi_signal(symbol)
+    ema_sig = ema200_50(symbol)
+
+# Jelkiírás:
+#     print(f"RSI Signal: {rsi_sig}")
+#     print(f"EMA Signal: {ema_sig}")
+
+    if rsi_sig == ema_sig:
+        return rsi_sig
+    else:
+        return "none"
+
+# valószínűleg nem kell:
+# def get_tickers_usdt():
+#     try:
+#         response = client.get_all_tickers()
+#         symbols = []
+#         for ticker in response:
+#             if ticker['symbol'].endswith('USDT'):
+#                 symbols.append(ticker['symbol'])
+#         return symbols
+#     except ClientError as error:
+#         print(
+#             "Found error. status: {}, error code: {}, error message: {}".format(
+#                 error.status_code, error.error_code, error.error_message
+#             )
+#         )
+
+# Fő ciklus a kereskedés futtatásához:
+while True:
+    symbols = get_tickers_usdt()
+    # Szabad USDT lekérdezése
+    balance = get_balance_usdt()
+    sleep(1)
+    if balance == None:
+        print('Cant connect to API. Check IP, restrictions or wait some time')
+    if balance != None:
+        print("Számla összege:", balance, "USDT")  # Az "Elérhető USDT"
+        pos = []
+        pos = get_pos()
+        print(f'Összesen {len(pos)} nyitott poziciód van: \n{pos}')
+
+        # ORDER LISTA LEKÉRÉSE:
+        ord = []
+        ord = check_orders()
+        # removing stop orders for closed positions
+        # for elem in ord:
+        #     if not elem in pos:
+        #         close_open_orders(elem)
+        qty = 1  # Legfeljebb ennyi nyitott pozíció engedélyezett
+        if len(pos) < qty:
+            for elem in symbols:
+                signal = trade_signal(elem)  # Hívd meg a kereskedési jelzés függvényt
+
+                # 'up' vagy 'down' jelzés esetén megbízást adunk le a nem nyitott pozíciójú szimbólumokra
+                # az USDCUSDC-t is kihagyjuk, mert 1:1 (nem kell pénzt költeni a jutalékra)
+                if signal == 'up' and elem != 'USDCUSDT' and not elem in pos and not elem in ord:
+                    print('Veteli jelet talaltam: ', elem)
+                    set_mode(elem, type)
+                    sleep(1)
+                    set_leverage(elem, leverage)
+                    sleep(1)
+                    print('Megbizás elhelyezve ehhez: ', elem)
+                    open_order
+                    symbol = elem
+                    order = True
+                    pos = get_pos()
+                    sleep(1)
+                    ord = check_orders()
+                    sleep(1)
+                    sleep(10)
+
+                if signal == 'down' and elem != 'USDCUSDT' and not elem in pos and not elem in ord:
+                    print('Eladasi jelet talalam: ', elem)
+                    set_mode(elem, type)
+                    sleep(1)
+                    set_leverage(elem, leverage)
+                    sleep(1)
+                    print('Megbizás elhelyezve ehhez: ', elem)
+                    open_order
+                    symbol = elem
+                    order = True
+                    pos = get_pos()
+                    sleep(1)
+                    ord = check_orders()
+                    sleep(1)
+                    sleep(10)
+
+            # print('3perc varakozas')
+            # sleep(180)
